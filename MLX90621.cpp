@@ -19,23 +19,28 @@
 ///////////////////////////////////////////////////////////////////////////////
 // Configuration
 
-void MLX90621::initialise(int _refresh_rate) {
+
+void MLX90621::initialise(int refresh_rate) {
 	/**
 	* Start up the MLX90621 sensor and prepare for reads.
 	*
-	* @param _refresh_rate Refresh rate of the sensor in frames per second. {0 (0.5), 1, 2, 4, 8, 16, 32}
+	* @param refresh_rate Refresh rate of the sensor in frames per second. {0 (0.5), 1, 2, 4, 8, 16, 32}
 	*/
 
 	// 7.1 - The initialisation process must start at least 5ms after POR release
 	delay(5);
-	refresh_rate = _refresh_rate;
+	_refresh_rate = refresh_rate;
 	load_sensor();
 }
 
 void MLX90621::load_sensor(){
+	/**
+	* Load the configuration data onto the sensor.
+	* This must happen before the sensor is able to give accurate temperature information.
+	*/
 	read_EEPROM();
 	write_trimming_value();
-	set_configuration(refresh_rate);
+	set_configuration();
 	precalculate_constants();
 }
 
@@ -78,7 +83,7 @@ void MLX90621::write_trimming_value() {
 	Wire.endTransmission();
 }
 
-void MLX90621::set_configuration(int refresh_rate) {
+void MLX90621::set_configuration() {
 	/**
 	* Set the configuration registers of the sensor
 	* Default configuration values used for most of the registers
@@ -100,12 +105,11 @@ void MLX90621::set_configuration(int refresh_rate) {
 	* 1		1 - Refresh rate 3 (1 Hz)
 	* 0		0 - Refresh rate 4 (1 Hz)
 	*
-	* @param refresh_rate Refresh rate of the sensor in frames per second. {0 (0.5), 1, 2, 4, 8, 16, 32}
 	*/
 
 	// Find the LSB that needs to be written for the refresh rate; ADC set to 15-bit resolution
 	byte Hz_LSB;
-	switch (refresh_rate) {
+	switch (_refresh_rate) {
 	case 0: //0.5 Hz
 		Hz_LSB = 0b00111111;
 		break;
@@ -182,9 +186,9 @@ uint8_t MLX90621::get_resolution(){
 	/**
 	* Get the resolution bits of the sensor.
 	*
-	* 00 = 15-bit
-	* 01 = 16-bit
-	* 10 = 17-bit
+	* 00 = 15-bit,
+	* 01 = 16-bit,
+	* 10 = 17-bit,
 	* 11 = 18-bit
 	*
 	* @return Resolution bits of the sensor
@@ -195,7 +199,7 @@ uint8_t MLX90621::get_resolution(){
 uint16_t MLX90621::get_config() {
 	/**
 	* Read the sensor's configuration register.
-	* See 8.2.2.1 for meaning of each bit
+	* See section 8.2.2.1 of the MLX90621 datasheet for meaning of each bit
 	*/
 
 	Wire.beginTransmission(RAM_ADDRESS);
@@ -252,8 +256,7 @@ int16_t MLX90621::twos_16(uint8_t highByte, uint8_t lowByte){
 int8_t MLX90621::twos_8(uint8_t byte) {
 	/**
 	* Return the 2's compliment of an 8-bit integer
-	* @param highByte MSB of the integer
-	* @param lowByte LSB of the integer
+	* @param byte Byte to transform
 	* @return 2's compliment of the input integer
 	*/
 	if (byte > 127)
@@ -262,6 +265,12 @@ int8_t MLX90621::twos_8(uint8_t byte) {
 }
 
 uint16_t MLX90621::unsigned_16(uint8_t highByte, uint8_t lowByte){
+	/**
+	* Combine two bytes into an unsigned word.
+	* @param highByte Most significant byte
+	* @param lowByte Least significant byte
+	* @param Unsigned word of the combined bytes
+	*/
 	return (highByte << 8) | lowByte;
 }
 
@@ -273,6 +282,7 @@ float MLX90621::get_ambient_temperature(){
 	/**
 	* Read the sensor and calculate the ambient temperature.
 	* The calculated temperature is stored in a class variable to provide access to other functions
+	* @return Ambient temperature measured by the sensor in deg C.
 	*/
 
 	check_configuration();
@@ -355,34 +365,28 @@ void MLX90621::precalculate_frame_values(){
 	tak4 = pow((float) ambient + 273.15, 4.0);
 }
 
-float MLX90621::calculate_pixel(uint8_t pixel_num, int ir_data[]){
+
+
+int MLX90621::get_compensation_pixel() {
 	/**
-	* Calculate the temperature recorded by the sensor for a given pixel.
+	* Get the value of the compensation pixel from the sensor.
+	* Not entirely sure what this one does, but the datasheet does lots of maths with it.
 	*
-	* @param pixel_num Number of the pixel to calculate. [0-63]. First row sits between 0-15; second row is between 16-31, etc.
-	* @param ir_data array containing the raw IR data from the sensor
-	* @return The recorded temperature of the pixel in deg C.
+	* @return Value of the compensation pixel
 	*/
-
-	// Grab the calibration and offset values for the individual pixel
-	double a_ij = ((float) a_common + eeprom_buffer[pixel_num] * pow(2.0, a_i_scale)) / resolution_comp;
-	double b_ij = (float) twos_8(eeprom_buffer[0x40 + pixel_num]) / (pow(2.0, b_i_scale) * resolution_comp);
-	double v_ir_off_comp = (float) ir_data[pixel_num] - (a_ij + b_ij * (ambient - 25.0));
-	double v_ir_tgc_comp = (float) v_ir_off_comp - tgc * v_cp_off_comp;
-
-	double alpha_ij = ((float) unsigned_16(eeprom_buffer[CAL_A0_H], eeprom_buffer[CAL_A0_L]) / pow(2.0, (float) eeprom_buffer[CAL_A0_SCALE]));
-	alpha_ij += ((float) eeprom_buffer[0x80 + pixel_num] / pow(2.0, (float) eeprom_buffer[CAL_DELTA_A_SCALE]));
-	alpha_ij = alpha_ij / resolution_comp;
-
-	//ksta = (float) twos_16(eeprom_buffer[CAL_KSTA_H], eeprom_buffer[CAL_KSTA_L]) / pow(2.0, 20.0);
-	//alpha_comp = (1 + ksta * (Tambient - 25.0)) * (alpha_ij - tgc * alpha_cp);
-	double alpha_comp = (alpha_ij - tgc * alpha_cp);  	// For my MLX90621 the ksta calibrations were 0
-												// so I can ignore them and save a few cycles
-	float v_ir_comp = v_ir_tgc_comp / emissivity;
-	double temperature = pow((v_ir_comp / alpha_comp) + tak4, 1.0 / 4.0) - 273.15;
-
-	return temperature;
+	Wire.beginTransmission(RAM_ADDRESS);
+	Wire.write(READ_RAM);
+	Wire.write(CPIX_ADDRESS);
+	Wire.write(0x00); // Address step
+	Wire.write(0x01); // Number of reads
+	Wire.endTransmission(false);
+	Wire.requestFrom(RAM_ADDRESS, 2);
+	byte cpixLow = Wire.read();
+	byte cpixHigh = Wire.read();
+	int cpix = twos_16(cpixHigh, cpixLow);
+	return cpix;
 }
+
 
 void MLX90621::get_IR(int ir_buffer[]) {
 	/**
@@ -411,22 +415,31 @@ void MLX90621::get_IR(int ir_buffer[]) {
 	}
 }
 
-int MLX90621::get_compensation_pixel() {
+float MLX90621::calculate_pixel(uint8_t pixel_num, int ir_data[]){
 	/**
-	* Get the value of the compensation pixel from the sensor.
-	* Not entirely sure what this one does, but the datasheet does lots of maths with it.
+	* Calculate the temperature recorded by the sensor for a given pixel.
 	*
-	* @return Value of the compensation pixel
+	* @param pixel_num Number of the pixel to calculate. [0-63]. First row sits between 0-15; second row is between 16-31, etc.
+	* @param ir_data array containing the raw IR data from the sensor
+	* @return The recorded temperature of the pixel in deg C.
 	*/
-	Wire.beginTransmission(RAM_ADDRESS);
-	Wire.write(READ_RAM);
-	Wire.write(CPIX_ADDRESS);
-	Wire.write(0x00); // Address step
-	Wire.write(0x01); // Number of reads
-	Wire.endTransmission(false);
-	Wire.requestFrom(RAM_ADDRESS, 2);
-	byte cpixLow = Wire.read();
-	byte cpixHigh = Wire.read();
-	int cpix = twos_16(cpixHigh, cpixLow);
-	return cpix;
+
+	// Grab the calibration and offset values for the individual pixel
+	double a_ij = ((float) a_common + eeprom_buffer[pixel_num] * pow(2.0, a_i_scale)) / resolution_comp;
+	double b_ij = (float) twos_8(eeprom_buffer[0x40 + pixel_num]) / (pow(2.0, b_i_scale) * resolution_comp);
+	double v_ir_off_comp = (float) ir_data[pixel_num] - (a_ij + b_ij * (ambient - 25.0));
+	double v_ir_tgc_comp = (float) v_ir_off_comp - tgc * v_cp_off_comp;
+
+	double alpha_ij = ((float) unsigned_16(eeprom_buffer[CAL_A0_H], eeprom_buffer[CAL_A0_L]) / pow(2.0, (float) eeprom_buffer[CAL_A0_SCALE]));
+	alpha_ij += ((float) eeprom_buffer[0x80 + pixel_num] / pow(2.0, (float) eeprom_buffer[CAL_DELTA_A_SCALE]));
+	alpha_ij = alpha_ij / resolution_comp;
+
+	//ksta = (float) twos_16(eeprom_buffer[CAL_KSTA_H], eeprom_buffer[CAL_KSTA_L]) / pow(2.0, 20.0);
+	//alpha_comp = (1 + ksta * (Tambient - 25.0)) * (alpha_ij - tgc * alpha_cp);
+	double alpha_comp = (alpha_ij - tgc * alpha_cp);  	// For my MLX90621 the ksta calibrations were 0
+												// so I can ignore them and save a few cycles
+	float v_ir_comp = v_ir_tgc_comp / emissivity;
+	double temperature = pow((v_ir_comp / alpha_comp) + tak4, 1.0 / 4.0) - 273.15;
+
+	return temperature;
 }

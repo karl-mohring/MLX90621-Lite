@@ -75,32 +75,7 @@ class MLX90621 {
 private:
 	/* Variables */
 	uint8_t eeprom_buffer[EEPROM_SIZE]; /**<RAM buffer to store the sensor's EEPROM data. Contains compensation values*/
-	int refresh_rate; /**<Refresh rate of the sensor in Hz. {0 (0.5 Hz), 1, 2, 4, 8, 16, 32}*/
-
-	// Config methods
-	void load_sensor();
-	void read_EEPROM();
-	void write_trimming_value();
-	void set_configuration(int _refresh_rate);
-	void precalculate_constants();
-	uint8_t get_resolution();
-	uint16_t get_config();
-	void check_configuration();
-	bool needs_reload();
-
-	// Utilities
-	int16_t twos_16(uint8_t highByte, uint8_t lowByte);
-	int8_t twos_8(uint8_t byte);
-	uint16_t unsigned_16(uint8_t highByte, uint8_t lowByte);
-
-	// Ambient temperature
-	int get_PTAT();
-
-	// Object temperature
-	void precalculate_frame_values();
-	int get_compensation_pixel();
-	void get_IR(int ir_buffer[]);
-	float calculate_pixel(uint8_t pixel_num, int ir_buffer[]);
+	int _refresh_rate; /**<Refresh rate of the sensor in Hz. {0 (0.5 Hz), 1, 2, 4, 8, 16, 32}*/
 
 	// Ambient temperature compensation constants
 	uint16_t k_t1_scale;
@@ -125,10 +100,162 @@ private:
 	float tak4;
 	float v_cp_off_comp;
 
+	// Config methods
+
+	/**
+	* Load the configuration data onto the sensor.
+	* This must happen before the sensor is able to give accurate temperature information.
+	*/
+	void load_sensor();
+
+	/**
+	* Read in sensor's EEPROM into MCU RAM for fast retrieval
+	* The EEPROM contains the compensation factors needed for temperature measurement
+	*/
+	void read_EEPROM();
+
+	/**
+	* Write the oscillator trim value from the sensor's EEPROM into the sensor's control registers
+	*/
+	void write_trimming_value();
+
+	/**
+	* Set the configuration registers of the sensor
+	* Default configuration values used for most of the registers
+	*/
+	void set_configuration();
+
+	/**
+	* Calculate the constants needed for temperature calculation
+	* This only needs to be performed once as the constants are hard-coded for each sensor.
+	*/
+	void precalculate_constants();
+
+	/**
+	* Get the resolution bits of the sensor.
+	* {00 = 15-bit,
+	* 01 = 16-bit,
+	* 10 = 17-bit,
+	* 11 = 18-bit}
+	* @return Resolution bits of the sensor
+	*/
+	uint8_t get_resolution();
+
+	/**
+	* Read the sensor's configuration register.
+	* See section 8.2.2.1 of the MLX90621 datasheet for meaning of each bit
+	*/
+	uint16_t get_config();
+
+	/**
+	* Reloads the sensor configuration data if the sensor has not been initialised.
+	* A power reset or brown-out may cause the configuration data to be lost during operation.
+	* This check ensures that the sensor has been configured and is ready for sensor reads.
+	*/
+	void check_configuration();
+
+	/**
+	* Check the ready status of the sensor to see if it needs to be reloaded
+	* The POR bit in the sensor's configuration is set if the device has been initialised.
+	* If the POR bit is clear, then the sensor has restarted and needs to be reloaded
+	*
+	* @return Status of the sensor. {True: sensor reload required; False: sensor has been initialised}
+	*/
+	bool needs_reload();
+
+	// Utilities
+	/**
+	* Return the 2's compliment of a 16-bit integer
+	* @param highByte MSB of the integer
+	* @param lowByte LSB of the integer
+	* @return 2's compliment of the input integer
+	*/
+	int16_t twos_16(uint8_t highByte, uint8_t lowByte);
+
+	/**
+	* Return the 2's compliment of an 8-bit integer
+	* @param byte Byte to transform
+	* @return 2's compliment of the input integer
+	*/
+	int8_t twos_8(uint8_t byte);
+
+	/**
+	* Combine two bytes into an unsigned word.
+	* @param highByte Most significant byte
+	* @param lowByte Least significant byte
+	* @param Unsigned word of the combined bytes
+	*/
+	uint16_t unsigned_16(uint8_t highByte, uint8_t lowByte);
+
+	// Ambient temperature
+	/**
+	* Read Proportional to Absolute Temperature sensor to find the ambient temperature of the chip
+	* @return Raw PTAT data from the sensor
+	*/
+	int get_PTAT();
+
+	// Object temperature
+	/**
+	* Calulate the frame constants needed for pixel temperature compensation.
+	* Must be run before measuring each frame.
+	*/
+	void precalculate_frame_values();
+
+	/**
+	* Get the value of the compensation pixel from the sensor.
+	* Not entirely sure what this one does, but the datasheet does lots of maths with it.
+	*
+	* @return Value of the compensation pixel
+	*/
+	int get_compensation_pixel();
+
+	/**
+	* Read in raw IR temperature data from the sensor's RAM
+	* The Wire library cannot handle packets larger than 32-bytes, so the registry must be read in chunks.
+	*
+	* @param ir_buffer Buffer to store the data. Must be at least NUM_PIXELS wide.
+	*/
+	void get_IR(int ir_buffer[]);
+
+	/**
+	* Calculate the temperature recorded by the sensor for a given pixel.
+	*
+	* @param pixel_num Number of the pixel to calculate. [0-63]. First row sits between 0-15; second row is between 16-31, etc.
+	* @param ir_data array containing the raw IR data from the sensor
+	* @return The recorded temperature of the pixel in deg C.
+	*/
+	float calculate_pixel(uint8_t pixel_num, int ir_data[]);
+
 public:
-	void initialise(int);
+
+	/**
+	* Start up the MLX90621 sensor and prepare for reads.
+	* @param refresh_rate Refresh rate of the sensor in frames per second. {0 (0.5), 1, 2, 4, 8, 16, 32}
+	*/
+	void initialise(int refresh_rate);
+
+	/**
+	* Get the temperatures recorded by the sensor and insert them into the given buffer
+	* The buffer must be at least 64 items wide to fit the data.
+	*
+	* @param output_buffer array to insert the temperature into.
+	*/
 	void get_temperatures(float output_buffer[]);
+
+	/**
+	* Print the temperature values of all pixels to the selected serial interface.
+	* Temperatures are printed as a comma-separated list.
+	* Pixels are ordered by row.
+	*
+	* @param ser The serial interface to print the temperatures to.
+	*/
 	void print_temperatures(Serial_ &ser);
+
+	/**
+	* Read the sensor and calculate the ambient temperature.
+	* The calculated temperature is stored in a class variable to provide access to other functions
+	* @return Ambient temperature measured by the sensor in deg C.
+	*/
 	float get_ambient_temperature();
 };
 
