@@ -332,6 +332,24 @@ void MLX90621::get_temperatures(float* output_buffer) {
 	}
 }
 
+void MLX90621::get_temperatures(float output_buffer[NUM_ROWS][NUM_COLS]){
+	/**
+	* Get the temperatures recorded by the sensor and insert them into the given buffer
+	* A 2D buffer is needed to put the data in their proper pixel locations.
+	*
+	* @param output_buffer A 2D matrix the same size as the sensor frame to insert the temperatures into
+	*/
+	int ir_data[NUM_PIXELS];
+	precalculate_frame_values();
+	get_IR(ir_data);
+
+	for (int i = 0; i < NUM_ROWS; i++) {
+		for (int j = 0; j < NUM_COLS; j++) {
+			output_buffer[i][j] = calculate_pixel((i*NUM_COLS) + j, ir_data);
+		}
+	}
+}
+
 void MLX90621::print_temperatures(Serial_ &ser){
 	/**
 	* Print the temperature values of all pixels to the selected serial interface.
@@ -365,8 +383,6 @@ void MLX90621::precalculate_frame_values(){
 	tak4 = pow((float) ambient + 273.15, 4.0);
 }
 
-
-
 int MLX90621::get_compensation_pixel() {
 	/**
 	* Get the value of the compensation pixel from the sensor.
@@ -386,7 +402,6 @@ int MLX90621::get_compensation_pixel() {
 	int cpix = twos_16(cpixHigh, cpixLow);
 	return cpix;
 }
-
 
 void MLX90621::get_IR(int ir_buffer[]) {
 	/**

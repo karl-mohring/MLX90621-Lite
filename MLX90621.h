@@ -241,6 +241,8 @@ public:
 	* @param output_buffer array to insert the temperature into.
 	*/
 	void get_temperatures(float output_buffer[]);
+	void get_temperatures(float output_buffer[NUM_ROWS][NUM_COLS]);
+
 
 	/**
 	* Print the temperature values of all pixels to the selected serial interface.
